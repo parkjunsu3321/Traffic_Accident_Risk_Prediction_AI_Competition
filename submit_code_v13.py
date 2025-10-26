@@ -174,11 +174,62 @@ class AvgProbaEnsemble:
         return np.mean(probs, axis=0)
 
 # -------------------\
-# [V11.1] 특징 공학 (GroupBy 객체 'g' 위치 수정)
+# [V12-PDF] PDF 명세서 기반 상수 정의 (오류 수정)
+# -------------------\
+
+# [V12-PDF 개선] PDF 명세서 기반 검사별 총 시도 횟수 상수 정의
+# A 검사 (A검사(신규검사) 명세.pdf 기반)
+A_TRIALS = {
+    'A1': 18.0,
+    'A2': 18.0,
+    'A3': 32.0,
+    'A3_VALID': 16.0,
+    'A3_INVALID': 8.0,
+    'A4': 80.0,
+    'A4_CONGRUENT': 40.0,
+    'A4_INCONGRUENT': 40.0,
+    'A5': 36.0,
+    'A5_NON_CHANGE': 18.0,
+    'A5_POS_CHANGE': 6.0,
+    'A5_COLOR_CHANGE': 6.0,
+    'A5_SHAPE_CHANGE': 6.0,
+    'A6': 14.0,
+    'A7': 18.0
+}
+# B 검사 (B검사(자격유지검사) 명세.pdf 기반)
+B_TRIALS = {
+    'B1': 16.0,
+    'B1_CHANGE': 8.0,
+    'B1_NON_CHANGE': 8.0,
+    'B2': 16.0,
+    'B2_CHANGE': 8.0,
+    'B2_NON_CHANGE': 8.0,
+    'B3': 15.0,
+    'B4': 60.0,
+    'B4_CONGRUENT': 30.0,
+    'B4_INCONGRUENT': 30.0,
+    'B5': 20.0,
+    'B6': 15.0,
+    'B7': 15.0,
+    'B8': 12.0
+}
+# B9/B10 다중과제 시도 횟수
+B9_TARGET_TRIALS = 15.0
+B9_DISTRACTOR_TRIALS = 35.0
+B9_VISUAL_TRIALS = 32.0
+B10_TARGET_TRIALS = 20.0
+B10_DISTRACTOR_TRIALS = 60.0
+B10_VIS1_TRIALS = 52.0
+B10_VIS2_TRIALS = 20.0
+
+
+# -------------------\
+# [V12-PDF] 특징 공학 (PDF 명세서 기반)
 # -------------------\
 def create_features(df: pd.DataFrame) -> pd.DataFrame:
     df_proc = df.copy()
 
+    # --- V12 Step 1, 2, 3 (Age, TestDate, PrimaryKey) - 동일 ---
     # 1. Age (나이) 수치화
     age_map = {f"{i}{s}": (i + 2 if s == 'a' else i + 7) for i in range(10, 90, 10) for s in ['a', 'b']}
     age_map.update({
@@ -191,99 +242,219 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
     df_proc['TestYear'] = (df_proc['TestDate_num'] // 100).astype(float)
     df_proc['TestMonth'] = (df_proc['TestDate_num'] % 100).astype(float)
 
-    # 3. PrimaryKey (운전자) 기반 변수 (정렬이 중요)
+    # 3. PrimaryKey (운전자) 기반 변수 (정렬)
     df_proc = df_proc.sort_values(by=['PrimaryKey', 'TestDate_num'])
-    
-    # [V11.1 수정] 'g' 객체 정의를 7단계 (NA_COUNT 생성) 이후로 이동
-    g_temp = df_proc.groupby('PrimaryKey') # 임시 g (TestCount 등 기본 피처용)
-    
+    g_temp = df_proc.groupby('PrimaryKey') # 임시 g
     df_proc['TestCount'] = g_temp['Test_id'].transform('count')
     df_proc['TestSequence'] = g_temp.cumcount() + 1
     df_proc['FirstTestAge'] = g_temp['Age_numeric'].transform('min')
     df_proc['FirstTestYear'] = g_temp['TestYear'].transform('min')
     df_proc['TimeSinceFirstTest_yr'] = df_proc['TestYear'] - df_proc['FirstTestYear']
+    # --- V12 Step 1, 2, 3 끝 ---
 
-    # '반응 시간' 컬럼들을 강제로 숫자형(numeric)으로 변환
+
+    # --- [V12-PDF 개선] 모든 PDF 기반 컬럼을 숫자로 변환 ---
+    # V12의 'rt_cols' 외에 PDF에 명시된 모든 정답/응답 컬럼을 숫자(에러 시 NaN)로 변환
+    pdf_cols_to_numeric = [
+        # A 검사
+        'A1-3',
+        'A2-3',
+        'A3-5-1', 'A3-5-2', 'A3-5-3', 'A3-5-4', # A3-5 응답 (추정)
+        'A4-3-1', 'A4-3-2', # A4-3 응답 (추정)
+        'A5-2-1', 'A5-2-2', # A5-2 응답 (추정)
+        'A6-1',
+        'A7-1',
+        'A8-1', 'A8-2',
+        # B 검사
+        'B1-1',
+        'B1-3-1', 'B1-3-2', 'B1-3-3', 'B1-3-4', # B1-3 응답 (추정)
+        'B2-1',
+        'B2-3-1', 'B2-3-2', 'B2-3-3', 'B2-3-4', # B2-3 응답 (추정)
+        'B3-1',
+        'B4-1',
+        'B5-1',
+        'B6',
+        'B7',
+        'B8'
+    ]
+    
+    # V12의 rt_cols
     rt_cols = [
         'A1-4', 'A2-4', 'A3-7', 'A4-5', # A검사 반응시간
         'B1-2', 'B2-2', 'B3-2', 'B4-2', 'B5-2'  # B검사 반응시간
     ]
-    for col in rt_cols:
+    
+    # A9/B9/B10 (V12에서 이미 사용 중인 컬럼)
+    v12_count_cols = [
+        'A9-1', 'A9-2', 'A9-3', 'A9-5',
+        'B9-1', 'B9-2', 'B9-3', 'B9-4', 'B9-5',
+        'B10-1', 'B10-2', 'B10-3', 'B10-4', 'B10-5', 'B10-6'
+    ]
+    
+    # 변환할 모든 컬럼 리스트
+    all_cols_to_numeric = rt_cols + pdf_cols_to_numeric + v12_count_cols
+    
+    for col in all_cols_to_numeric:
         if col in df_proc.columns:
             df_proc[col] = pd.to_numeric(df_proc[col], errors='coerce')
-    
-    print("[Global FE V6] '반응 시간' 컬럼 강제 숫자형 변환 완료.")
+        else:
+            # [V12-PDF 개선] 컬럼이 존재하지 않으면 NaN으로 생성 (A/B 검사 분리 대응)
+            df_proc[col] = np.nan 
 
-    # 4. A검사 (인성) 파생 변수
+    print("[Global FE V12-PDF] PDF 기반 모든 컬럼 숫자형 변환 완료.")
+
+    # --- V12 Step 4 (A9) / 5 (B9) / 6 (B10) - 일부 수정 ---
+    
+    # 4. A검사 (인성) 파생 변수 (V12와 동일)
     a9_new_cols = ['A9_Stability_Score', 'A9_Stress_Ratio', 'A9_Reality_Stress']
-    safe_cols_A = all(c in df_proc.columns for c in ['A9-1', 'A9-2', 'A9-3', 'A9-5'])
+    df_proc['A9_Stability_Score'] = df_proc['A9-1'] + df_proc['A9-2']
+    df_proc['A9_Stress_Ratio'] = df_proc['A9-1'] / (df_proc['A9-5'] + 1e-6)
+    df_proc['A9_Reality_Stress'] = df_proc['A9-3'] / (df_proc['A9-5'] + 1e-6)
     
-    if safe_cols_A:
-        df_proc['A9_Stability_Score'] = df_proc['A9-1'] + df_proc['A9-2']
-        df_proc['A9_Stress_Ratio'] = df_proc['A9-1'] / (df_proc['A9-5'] + 1e-6)
-        df_proc['A9_Reality_Stress'] = df_proc['A9-3'] / (df_proc['A9-5'] + 1e-6)
-    else:
-        for col in a9_new_cols: df_proc[col] = np.nan
-    df_proc[a9_new_cols] = df_proc[a9_new_cols].fillna(0.0)
-
     # 5. B검사 (다중과제 B9) 파생 변수
-    b9_new_cols = ['B9_hit_rate', 'B9_fa_rate', 'B9_d_prime_proxy', 'B9_visual_error_rate', 'B9_audio_accuracy']
-    safe_cols_B9 = all(c in df_proc.columns for c in ['B9-1', 'B9-2', 'B9-3', 'B9-4', 'B9-5'])
+    b9_new_cols = ['B9_hit_rate', 'B9_fa_rate', 'B9_d_prime_proxy', 'B9_visual_error_rate', 'B9_audio_accuracy',
+                   'B9_miss_rate', 'B9_cr_rate']
     
-    if safe_cols_B9:
-        B9_AUDIO_TRIALS = 50.0 
-        B9_VISUAL_TRIALS = 32.0
-        b9_hit_plus_miss = df_proc['B9-1'] + df_proc['B9-2']
-        b9_fa_plus_cr = df_proc['B9-3'] + df_proc['B9-4']
-        df_proc['B9_hit_rate'] = df_proc['B9-1'] / (b9_hit_plus_miss + 1e-6)
-        df_proc['B9_fa_rate'] = df_proc['B9-3'] / (b9_fa_plus_cr + 1e-6)
-        df_proc['B9_d_prime_proxy'] = df_proc['B9_hit_rate'] - df_proc['B9_fa_rate']
-        df_proc['B9_visual_error_rate'] = df_proc['B9-5'] / B9_VISUAL_TRIALS
-        df_proc['B9_audio_accuracy'] = (df_proc['B9-1'] + df_proc['B9-4']) / B9_AUDIO_TRIALS
-    else:
-        for col in b9_new_cols: df_proc[col] = np.nan
-    df_proc[b9_new_cols] = df_proc[b9_new_cols].fillna(0.0)
+    # V12의 d_prime 계산식 (Reported-based)
+    b9_hit_rate_ratio = df_proc['B9-1'] / (df_proc['B9-1'] + df_proc['B9-2'] + 1e-6)
+    b9_fa_rate_ratio = df_proc['B9-3'] / (df_proc['B9-3'] + df_proc['B9-4'] + 1e-6)
+    df_proc['B9_d_prime_proxy'] = b9_hit_rate_ratio - b9_fa_rate_ratio
+    
+    # [V12-PDF 개선] 고정된 Trial 횟수(PDF) 기반 비율 (더 안정적)
+    df_proc['B9_hit_rate'] = df_proc['B9-1'] / B9_TARGET_TRIALS
+    df_proc['B9_miss_rate'] = df_proc['B9-2'] / B9_TARGET_TRIALS
+    df_proc['B9_fa_rate'] = df_proc['B9-3'] / B9_DISTRACTOR_TRIALS
+    df_proc['B9_cr_rate'] = df_proc['B9-4'] / B9_DISTRACTOR_TRIALS
+    
+    df_proc['B9_visual_error_rate'] = df_proc['B9-5'] / B9_VISUAL_TRIALS
+    df_proc['B9_audio_accuracy'] = (df_proc['B9-1'] + df_proc['B9-4']) / (B9_TARGET_TRIALS + B9_DISTRACTOR_TRIALS)
+
 
     # 6. B검사 (다중과제 B10) 파생 변수
     b10_new_cols = ['B10_hit_rate', 'B10_fa_rate', 'B10_d_prime_proxy', 'B10_audio_accuracy', 
-                    'B10_vis1_error_rate', 'B10_vis2_accuracy', 'B10_total_visual_error_rate']
-    safe_cols_B10 = all(c in df_proc.columns for c in ['B10-1', 'B10-2', 'B10-3', 'B10-4', 'B10-5', 'B10-6'])
-    
-    if safe_cols_B10:
-        B10_AUDIO_TRIALS = 80.0
-        B10_VIS1_TRIALS = 52.0
-        B10_VIS2_TRIALS = 20.0
-        B10_TOTAL_VISUAL_TRIALS = B10_VIS1_TRIALS + B10_VIS2_TRIALS
-        b10_hit_plus_miss = df_proc['B10-1'] + df_proc['B10-2']
-        b10_fa_plus_cr = df_proc['B10-3'] + df_proc['B10-4']
-        df_proc['B10_hit_rate'] = df_proc['B10-1'] / (b10_hit_plus_miss + 1e-6)
-        df_proc['B10_fa_rate'] = df_proc['B10-3'] / (b10_fa_plus_cr + 1e-6)
-        df_proc['B10_d_prime_proxy'] = df_proc['B10_hit_rate'] - df_proc['B10_fa_rate']
-        df_proc['B10_audio_accuracy'] = (df_proc['B10-1'] + df_proc['B10-4']) / B10_AUDIO_TRIALS
-        df_proc['B10_vis1_error_rate'] = df_proc['B10-5'] / B10_VIS1_TRIALS
-        df_proc['B10_vis2_accuracy'] = df_proc['B10-6'] / B10_VIS2_TRIALS
-        b10_total_visual_errors = df_proc['B10-5'] + (B10_VIS2_TRIALS - df_proc['B10-6'])
-        df_proc['B10_total_visual_error_rate'] = b10_total_visual_errors / B10_TOTAL_VISUAL_TRIALS
-    else:
-        for col in b10_new_cols: df_proc[col] = np.nan
-    df_proc[b10_new_cols] = df_proc[b10_new_cols].fillna(0.0)
+                    'B10_vis1_error_rate', 'B10_vis2_accuracy', 'B10_total_visual_error_rate',
+                    'B10_miss_rate', 'B10_cr_rate']
 
-    # 7. Row-wise NA (결측치) 변수
+    b10_hit_rate_ratio = df_proc['B10-1'] / (df_proc['B10-1'] + df_proc['B10-2'] + 1e-6)
+    b10_fa_rate_ratio = df_proc['B10-3'] / (df_proc['B10-3'] + df_proc['B10-4'] + 1e-6)
+    df_proc['B10_d_prime_proxy'] = b10_hit_rate_ratio - b10_fa_rate_ratio
+
+    df_proc['B10_hit_rate'] = df_proc['B10-1'] / B10_TARGET_TRIALS
+    df_proc['B10_miss_rate'] = df_proc['B10-2'] / B10_TARGET_TRIALS
+    df_proc['B10_fa_rate'] = df_proc['B10-3'] / B10_DISTRACTOR_TRIALS
+    df_proc['B10_cr_rate'] = df_proc['B10-4'] / B10_DISTRACTOR_TRIALS
+
+    df_proc['B10_audio_accuracy'] = (df_proc['B10-1'] + df_proc['B10-4']) / (B10_TARGET_TRIALS + B10_DISTRACTOR_TRIALS)
+    df_proc['B10_vis1_error_rate'] = df_proc['B10-5'] / B10_VIS1_TRIALS
+    df_proc['B10_vis2_accuracy'] = df_proc['B10-6'] / B10_VIS2_TRIALS
+    
+    b10_total_visual_errors = df_proc['B10-5'] + (B10_VIS2_TRIALS - df_proc['B10-6'])
+    df_proc['B10_total_visual_error_rate'] = b10_total_visual_errors / (B10_VIS1_TRIALS + B10_VIS2_TRIALS)
+
+    
+    # --- [V12-PDF 개선] Step 6.5: 누락된 모든 A/B 검사 피처 생성 ---
+    print("[Global FE V12-PDF] Creating PDF-based Accuracy features...")
+    
+    pdf_derived_cols = [] # <-- [중요] 생성된 피처를 담을 리스트
+
+    # A1 (속도 예측)
+    df_proc['A1_Acc'] = df_proc['A1-3'] / A_TRIALS['A1']
+    pdf_derived_cols.extend(['A1_Acc'])
+    
+    # A2 (정지거리 예측)
+    df_proc['A2_Acc'] = df_proc['A2-3'] / A_TRIALS['A2']
+    pdf_derived_cols.extend(['A2_Acc'])
+
+    # A3 (주의 전환) (A3-5-1: valid correct, A3-5-3: invalid correct)
+    df_proc['A3_Acc_Valid'] = df_proc['A3-5-1'] / A_TRIALS['A3_VALID']
+    df_proc['A3_Acc_Invalid'] = df_proc['A3-5-3'] / A_TRIALS['A3_INVALID']
+    df_proc['A3_Acc_Overall'] = (df_proc['A3-5-1'] + df_proc['A3-5-3']) / A_TRIALS['A3']
+    df_proc['A3_Attn_Cost_Acc_Diff'] = df_proc['A3_Acc_Valid'] - df_proc['A3_Acc_Invalid']
+    pdf_derived_cols.extend(['A3_Acc_Valid', 'A3_Acc_Invalid', 'A3_Acc_Overall', 'A3_Attn_Cost_Acc_Diff'])
+
+    # A4 (선택적 주의력) (A4-3-1: correct, A4-3-2: incorrect)
+    # (A4-3-1이 정답 수, A4-3-2가 오답 수라고 가정)
+    df_proc['A4_Acc_Overall'] = df_proc['A4-3-1'] / A_TRIALS['A4']
+    pdf_derived_cols.extend(['A4_Acc_Overall'])
+
+    # A5 (변화 탐지) (A5-2-1: correct, A5-2-2: incorrect)
+    df_proc['A5_Acc_Overall'] = df_proc['A5-2-1'] / A_TRIALS['A5']
+    pdf_derived_cols.extend(['A5_Acc_Overall'])
+
+    # A6, A7 (판단 능력)
+    df_proc['A6_Acc'] = df_proc['A6-1'] / A_TRIALS['A6']
+    df_proc['A7_Acc'] = df_proc['A7-1'] / A_TRIALS['A7']
+    pdf_derived_cols.extend(['A6_Acc', 'A7_Acc'])
+
+    # A8 (타당도) - 비율이 아닌 원본 값(개수)을 그대로 사용
+    df_proc['A8_Validity_1'] = df_proc['A8-1']
+    df_proc['A8_Validity_2'] = df_proc['A8-2']
+    pdf_derived_cols.extend(['A8_Validity_1', 'A8_Validity_2'])
+
+    # B1 (시야각)
+    # B1-1: 1 correct / 2 incorrect (1의 개수라고 가정)
+    # B1-3: 1 change-correct / 3 non change-correct
+    df_proc['B1_Acc_Task1'] = df_proc['B1-1'] 
+    df_proc['B1_Acc_Change'] = df_proc['B1-3-1'] / B_TRIALS['B1_CHANGE']
+    df_proc['B1_Acc_NoChange'] = df_proc['B1-3-3'] / B_TRIALS['B1_NON_CHANGE']
+    df_proc['B1_Acc_Task2_Overall'] = (df_proc['B1-3-1'] + df_proc['B1-3-3']) / B_TRIALS['B1']
+    pdf_derived_cols.extend(['B1_Acc_Task1', 'B1_Acc_Change', 'B1_Acc_NoChange', 'B1_Acc_Task2_Overall'])
+
+    # B2 (시야각)
+    # B2-1: 1 correct / 2 incorrect (1의 개수라고 가정)
+    # B2-3: 1 change-correct / 3 non change-correct
+    df_proc['B2_Acc_Task1'] = df_proc['B2-1']
+    df_proc['B2_Acc_Change'] = df_proc['B2-3-1'] / B_TRIALS['B2_CHANGE']
+    df_proc['B2_Acc_NoChange'] = df_proc['B2-3-3'] / B_TRIALS['B2_NON_CHANGE']
+    df_proc['B2_Acc_Task2_Overall'] = (df_proc['B2-3-1'] + df_proc['B2-3-3']) / B_TRIALS['B2']
+    pdf_derived_cols.extend(['B2_Acc_Task1', 'B2_Acc_Change', 'B2_Acc_NoChange', 'B2_Acc_Task2_Overall'])
+    
+    # B3 (시각-운동 협응)
+    df_proc['B3_Acc'] = df_proc['B3-1'] # B3-1: 1 correct / 2 incorrect (1의 개수라고 가정)
+    pdf_derived_cols.extend(['B3_Acc'])
+
+    # B4 (선택적 주의력)
+    # B4-1: 1 correct (congruent) ... / 3 and 5 correct (incongruent)
+    # B4-1이 *총 정답 수*라고 가정
+    df_proc['B4_Acc_Overall'] = df_proc['B4-1'] / B_TRIALS['B4']
+    pdf_derived_cols.extend(['B4_Acc_Overall'])
+
+    # B5 (공간 판단력)
+    df_proc['B5_Acc'] = df_proc['B5-1'] # B5-1: 1 correct / 2 incorrect (1의 개수라고 가정)
+    pdf_derived_cols.extend(['B5_Acc'])
+
+    # B6, B7, B8
+    df_proc['B6_Acc'] = df_proc['B6'] / B_TRIALS['B6'] # B6: 1 correct (1의 개수라고 가정)
+    df_proc['B7_Acc'] = df_proc['B7'] / B_TRIALS['B7'] # B7: 1 correct (1의 개수라고 가정)
+    df_proc['B8_Acc'] = df_proc['B8'] / B_TRIALS['B8'] # B8: 1 correct (1의 개수라고 가정)
+    pdf_derived_cols.extend(['B6_Acc', 'B7_Acc', 'B8_Acc'])
+
+    # 생성된 모든 피처의 NaN을 0.0으로 채움
+    df_proc[a9_new_cols + b9_new_cols + b10_new_cols + pdf_derived_cols] = \
+        df_proc[a9_new_cols + b9_new_cols + b10_new_cols + pdf_derived_cols].fillna(0.0)
+
+    print(f"[Global FE V12-PDF] Created {len(pdf_derived_cols)} new PDF-based features.")
+    
+
+    # --- V12 Step 7 (Row-wise NA) - 동일 ---
     base_feature_cols = [c for c in df_proc.columns if (c.startswith("A") or c.startswith("B")) and '_' not in c]
     df_proc = add_rowwise_features(df_proc, base_feature_cols)
 
-    # [V11.1 수정] 'g' 객체를 NA_COUNT 등이 추가된 'df_proc'로 새로고침
+    # --- V12 Step 8 (Global/Expanding Stats) - 수정 ---
+    
+    # V12 (V11.1)의 g 객체 새로고침 (NA_COUNT 포함)
     g = df_proc.groupby('PrimaryKey') 
 
-    # --- [V11] V6의 key_numeric_cols 정의 (V11의 고급 피처 생성에 사용됨) ---
+    # [V12-PDF 중요] key_numeric_cols에 새로 생성한 PDF 기반 피처들 추가
     key_numeric_cols = (
-        rt_cols + a9_new_cols + b9_new_cols + b10_new_cols + 
+        rt_cols + a9_new_cols + b9_new_cols + b10_new_cols + pdf_derived_cols + # <-- [수정] pdf_derived_cols 추가
         ['NA_COUNT', 'NA_RATIO', 'Age_numeric']
     )
     key_numeric_cols = [c for c in key_numeric_cols if c in df_proc.columns]
 
-    # 8. [V11] Global (전체) 및 Expanding (누적) 통계 피처
-    print(f"[Global FE V11] Creating {len(key_numeric_cols)} Global/Expanding features...")
+    print(f"[Global FE V12-PDF] Creating Global/Expanding features for {len(key_numeric_cols)} total key features...")
+    
+    # 8. [V11] Global (전체) 및 Expanding (누적) 통계 피처 (V12와 동일)
     for col in key_numeric_cols:
         # Global (전체) 통계
         global_mean = g[col].transform('mean')
@@ -302,10 +473,10 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
         df_proc[f'{col}_exp_mean'] = exp_mean.reset_index(level=0, drop=True)
         df_proc[f'{col}_exp_std'] = exp_std.reset_index(level=0, drop=True)
 
-    print("[Global FE V11] Global/Expanding features created.")
+    print("[Global FE V12-PDF] Global/Expanding features created.")
 
     # 9. [V6] 시계열 피처 (Trend) 생성 (V11에서도 유지)
-    print(f"[Global FE V6] Creating {len(key_numeric_cols)} time-series features (diff/shift/roll)...")
+    print(f"[Global FE V12-PDF] Creating {len(key_numeric_cols)} time-series features (diff/shift/roll)...")
     
     for col in key_numeric_cols:
         df_proc[f'{col}_diff'] = g[col].diff()
@@ -313,9 +484,9 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
         roll_mean = g[col].rolling(3, min_periods=1).mean()
         df_proc[f'{col}_roll3_mean'] = roll_mean.reset_index(level=0, drop=True)
     
-    print("[Global FE V6] Time-series features created.")
+    print("[Global FE V12-PDF] Time-series features created.")
     
-    # ---
+    # --- V12 Drop (동일) ---
     
     df_proc = df_proc.drop(columns=['Age', 'TestDate', 'TestDate_num', 'FirstTestYear'], errors='ignore')
     
@@ -407,7 +578,8 @@ def train_single_fold(
     study.optimize(objective, n_trials=OPTUNA_N_TRIALS)
 
     best_params = study.best_params
-    print(f"{fold_label} Optuna finished. Best AUC: {study.best_value:.5f}")
+    # [V12-PDF 수정] Optuna 로그를 "Best AUC"에서 "Best Score"로 변경
+    print(f"{fold_label} Optuna finished. Best Score: {study.best_value:.5f}")
 
     fold_hgb_params.update(best_params)
     
@@ -524,19 +696,20 @@ def predict_partition_kfold(
 
 
 # -------------------\
-# 메타 저장 (V11.1)
+# [V12-PDF] 메타 저장 (피처 내역 수정)
 # -------------------\
 def save_meta():
     meta = dict(
-        model=f"HGB({N_SPLITS_KFold}-Fold Ensemble) + 3-seed AvgProba + OrdinalEnc + Calib [Optuna V11.1-Monitoring]", # 이름만 수정
+        model=f"HGB({N_SPLITS_KFold}-Fold Ensemble) + 3-seed AvgProba + OrdinalEnc + Calib [Optuna V12-PDF-Features]", # 이름 수정
         feature_engineering=[
             "Age_numeric, TestYear, TestMonth, TestCount, TestSequence, etc.",
             "NA_COUNT, NA_RATIO (row-wise)",
-            "A9_..., B9_..., B10_... (Derived features)",
-            "[V6-FE] Time-Series features (diff, shift, roll3_mean)",
+            "A9_..., B9_..., B10_... (V12-PDF: B9/B10 features refined with fixed trials)",
+            "[V12-PDF-FE] Added PDF-based features (Accuracy, Ratios) for all A/B tasks (A1-A8, B1-B8).",
+            "[V6-FE] Time-Series features (diff, shift, roll3_mean) applied to all key numeric features.",
             "[V8-FE] A/B Feature Splitting",
             "[V9-Fix] Removed 'Test_x', 'Test_y' leakage features",
-            "[V11-FE] Added Global Stats (transform mean/std, vs_mean)",
+            "[V1II-FE] Added Global Stats (transform mean/std, vs_mean)",
             "[V11-FE] Added Expanding Stats (expanding mean/std)",
             "[V11.1-Fix] Fixed 'g' groupby object refresh order for NA_COUNT"
         ],
@@ -580,7 +753,7 @@ def main():
         test_feat_raw.assign(is_train=0)
     ], ignore_index=True)
 
-    # [V11.1] 수정된 create_features 함수가 여기서 호출됨
+    # [V12-PDF] 수정된 create_features 함수가 여기서 호출됨
     all_feat_processed = create_features(all_feat_raw)
 
     train_feat_processed = all_feat_processed[all_feat_processed['is_train'] == 1].drop(columns='is_train')
@@ -679,10 +852,10 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     sub_final.to_csv(SUBMISSION_PATH, index=False)
 
-    save_meta() # [V11.1] 메타 정보 저장
+    save_meta() # [V12-PDF] 수정된 메타 정보 저장
 
     dt = time.time() - t0
-    print(f"[V11.1] submission saved -> {SUBMISSION_PATH} | elapsed: {dt:.2f}s")
+    print(f"[V12-PDF] submission saved -> {SUBMISSION_PATH} | elapsed: {dt:.2f}s")
 
 if __name__ == "__main__":
     main()

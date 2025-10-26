@@ -57,7 +57,7 @@ BASE_HGB_PARAMS = dict(
     max_leaf_nodes=63,
     min_samples_leaf=20,
     l2_regularization=0.0,
-    class_weight=None,
+    class_weight="balanced",
     early_stopping=False,
     validation_fraction=None,
     n_iter_no_change=10, 
@@ -388,22 +388,10 @@ def train_single_fold(
         model.fit(X_tr_t, y_tr)
         
         val_proba = np.clip(model.predict_proba(X_val_t)[:, 1], 1e-7, 1-1e-7)
-        
-        # --- ⬇️ 여기부터 수정 ⬇️ ---
-
-        # 1. 모든 평가 지표 계산
         auc = roc_auc_score(y_val, val_proba)
-        brier = brier_score_loss(y_val, val_proba)
-        # 스크립트 상단에 이미 정의된 ECE 함수 사용
-        ece = expected_calibration_error(y_val, val_proba) 
-        
-        # 2. 대회 공식 평가 산식 (낮을수록 좋음)
-        combined_score = 0.5 * (1.0 - auc) + 0.25 * brier + 0.25 * ece
-        
-        return combined_score # <-- AUC가 아닌 최종 점수를 반환
+        return auc # <-- V11 방식 (AUC 최대화)
 
-    # --- ⬇️ direction도 'minimize'로 수정 ⬇️ ---
-    study = optuna.create_study(direction="minimize") # <-- "maximize"에서 "minimize"로 변경
+    study = optuna.create_study(direction="maximize") # <-- V11 방식 (AUC 최대화)
     study.optimize(objective, n_trials=OPTUNA_N_TRIALS)
 
     best_params = study.best_params
