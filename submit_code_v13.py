@@ -180,10 +180,10 @@ class AvgProbaEnsemble:
         return np.mean(probs, axis=0)
 
 # -------------------\
-# [V11.1] 특징 공학 (GroupBy 객체 'g' 위치 수정)
+# [V13.4] 특징 공학 (MIM 플래그 추가, 'Test' 사용)
 # -------------------\
 def create_features(df: pd.DataFrame) -> pd.DataFrame:
-    # df 에는 'Test' (A/B) 컬럼이 main에서 병합되어 들어옴
+    # df 에는 'Test' (A/B), 'Label' 컬럼이 main에서 병합되어 들어옴
     df_proc = df.copy()
 
     # 1. Age (나이) 수치화
@@ -203,24 +203,30 @@ def create_features(df: pd.DataFrame) -> pd.DataFrame:
     
     g_temp = df_proc.groupby('PrimaryKey') # 임시 g (TestCount 등 기본 피처용)
 
-    # --- ⬇️ [V13] 플래그 피처 추가 (MIM) ⬇️ ---
-    # 'Test' 컬럼은 main에서 병합되어 있어야 함
+    # --- ⬇️ [V13.4] 플래그 피처 추가 (MIM) ⬇️ ---
     print("[Global FE V13] Creating Missingness Indicator flags...")
     try:
-        # 각 Key가 A, B 검사를 봤는지 여부를 미리 계산
-        key_has_A = g_temp['Test'].transform(lambda s: s.eq('A').any())
-        key_has_B = g_temp['Test'].transform(lambda s: s.eq('B').any())
-        
-        df_proc['Key_Has_A'] = key_has_A.astype(int)
-        df_proc['Key_Has_B'] = key_has_B.astype(int)
-        df_proc['Key_Has_Both_AB'] = (key_has_A & key_has_B).astype(int)
-        print("[Global FE V13] Flags Key_Has_A, Key_Has_B created.")
+        # 'Test' 컬럼이 있는지 확인 (main에서 병합되어 들어옴)
+        if 'Test' in df_proc.columns:
+            # 각 Key가 A, B 검사를 봤는지 여부를 미리 계산
+            def check_test_type(series, test_type):
+                return series.eq(test_type).any()
+                
+            key_has_A = g_temp['Test'].transform(check_test_type, test_type='A')
+            key_has_B = g_temp['Test'].transform(check_test_type, test_type='B')
+            
+            df_proc['Key_Has_A'] = key_has_A.astype(int)
+            df_proc['Key_Has_B'] = key_has_B.astype(int)
+            df_proc['Key_Has_Both_AB'] = (df_proc['Key_Has_A'] & df_proc['Key_Has_B']).astype(int)
+            print("[Global FE V13] Flags Key_Has_A, Key_Has_B created.")
+        else:
+            raise KeyError("'Test' column not found during flag creation.")
     except Exception as e:
         print(f"WARN: Flag creation failed ({e}). Adding empty flags.")
         df_proc['Key_Has_A'] = 0
         df_proc['Key_Has_B'] = 0
         df_proc['Key_Has_Both_AB'] = 0
-    # --- ⬆️ [V13] 플래그 피처 추가 (MIM) ⬆️ ---
+    # --- ⬆️ [V13.4] 플래그 피처 추가 (MIM) ⬆️ ---
     
     df_proc['TestCount'] = g_temp['Test_id'].transform('count')
     df_proc['TestSequence'] = g_temp.cumcount() + 1
@@ -388,6 +394,7 @@ def train_single_fold(
         
     # 3. 전처리기 (Preprocessor)
     # [V13] 플래그 피처는 'Key_'로 시작하므로, 숫자/카테고리 분리 시 알아서 처리됨
+    # [V13.4] 'Test' 컬럼은 이미 drop_cols_prep에서 제거됨
     num_cols, cat_cols = separate_num_cat(X_tr, drop_cols=[])
     
     print(f"{fold_label} Preprocessing: {len(num_cols)} num_cols, {len(cat_cols)} cat_cols.")
@@ -499,10 +506,13 @@ def _predict_single(
         # (A피처 + [V13] 플래그 피처가 함께 사용됨)
         pass # A 피처를 삭제하지 않고 유지
     
-    # [V9] 누수 피처 제거
-    drop_cols = [key, "PrimaryKey"] + \
-                (["Test"] if "Test" in df.columns else []) + \
-                ['Test_x', 'Test_y'] 
+    # [V13.4] 'Test' (A/B 구분자) 컬럼도 여기서 삭제
+    drop_cols = [key, "PrimaryKey", "Test"] + \
+                (["Label"] if "Label" in df.columns else [])
+    
+    # v12의 'Test_x', 'Test_y'가 존재할 경우에만 삭제 시도
+    leakage_cols = [c for c in ['Test_x', 'Test_y'] if c in df.columns]
+    drop_cols.extend(leakage_cols)
 
     X = df.drop(columns=drop_cols, errors="ignore")
     X_t = preproc.transform(X)
@@ -563,7 +573,7 @@ def predict_partition_kfold(
 # -------------------\
 def save_meta():
     meta = dict(
-        model=f"HGB({N_SPLITS_KFold}-Fold Ensemble) + 3-seed AvgProba + OrdinalEnc + Calib [Optuna V13-MIM]", # 이름 수정
+        model=f"HGB({N_SPLITS_KFold}-Fold Ensemble) + 3-seed AvgProba + OrdinalEnc + Calib [Optuna V13.4-MIM-Drop]", # 이름 수정
         feature_engineering=[
             "Age_numeric, TestYear, TestMonth, TestCount, TestSequence, etc.",
             "NA_COUNT, NA_RATIO (row-wise)",
@@ -571,7 +581,8 @@ def save_meta():
             "[V6-FE] Time-Series features (diff, shift, roll3_mean)",
             "[V12.1-FE-FIX] Hybrid Strategy: Model A drops B-features, Model B KEEPS A-features",
             "[V13-FE] Added Missingness Indicator flags (Key_Has_A, Key_Has_B_AB)", # <-- 수정됨
-            "[V9-Fix] Removed 'Test_x', 'Test_y' leakage features",
+            "[V13.4-FE] Dropped 'Test' from A/B.csv to prevent merge collision", # <-- 수정됨
+            "[V9-Fix] Removed 'Test_x', 'Test_y' leakage features (if any)",
             "[V11-FE] Added Global Stats (transform mean/std, vs_mean)",
             "[V11-FE] Added Expanding Stats (expanding mean/std)",
             "[V11.1-Fix] Fixed 'g' groupby object refresh order for NA_COUNT"
@@ -594,7 +605,7 @@ def save_meta():
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 # -------------------\
-# [V10] 메인 (K-Fold 학습 루프, 변경 없음)
+# [V13.4] 메인 (MIM 플래그를 위한 데이터 순서 수정)
 # -------------------\
 def main():
     t0 = time.time()
@@ -611,8 +622,14 @@ def main():
     train_feat_raw = pd.concat([A_train_feat_raw, B_train_feat_raw], ignore_index=True)
     test_feat_raw  = pd.concat([A_test_feat_raw,  B_test_feat_raw],  ignore_index=True)
     
-    # [V13] 'Test' 컬럼(A/B)을 create_features로 전달하기 위해 병합 순서 변경
-    print("[Main V13] Merging index (A/B) and features (PrimaryKey) before FE.")
+    # [V13.4] 'Test' 컬럼 이름 충돌 방지를 위해 A/B.csv의 'Test' 컬럼 삭제
+    if 'Test' in train_feat_raw.columns:
+        train_feat_raw = train_feat_raw.drop(columns=['Test'], errors='ignore')
+    if 'Test' in test_feat_raw.columns:
+        test_feat_raw = test_feat_raw.drop(columns=['Test'], errors='ignore')
+    
+    # [V13] 'Test', 'Label' 컬럼을 create_features로 전달하기 위해 병합
+    print("[Main V13] Merging index (Test, Label) and features (PrimaryKey) before FE.")
     train_data = train_idx.merge(train_feat_raw, on=key_col, how="left")
     test_data = test_idx.merge(test_feat_raw, on=key_col, how="left")
 
@@ -621,7 +638,7 @@ def main():
         test_data.assign(is_train=0)
     ], ignore_index=True)
 
-    # [V13] 'Test' 컬럼이 포함된 df가 create_features로 전달됨
+    # [V13] 'Test', 'Label' 컬럼이 포함된 df가 create_features로 전달됨
     all_feat_processed = create_features(all_feat_raw)
 
     train_feat_processed = all_feat_processed[all_feat_processed['is_train'] == 1].drop(columns='is_train')
@@ -632,16 +649,22 @@ def main():
     print("-" * 50)
 
     # --- 2. A 모델 K-Fold 학습 ---
+    # [V13.4] 'Test'로 필터링 (원본 v12 방식)
+    A_train_idx = train_idx[train_idx["Test"] == "A"].copy()
     A_test_idx  = test_idx[test_idx["Test"] == "A"].copy()
     
-    # [V13.1 수정] train_feat_processed에서 직접 필터링 (Merge 불필요)
     df_A_full = train_feat_processed[train_feat_processed["Test"] == "A"].copy()
 
     if len(df_A_full) > 0:
         y_A = df_A_full[label_col].astype(int).values
         groups_A = df_A_full['PrimaryKey'].values
         
-        drop_cols_prep = [key_col, label_col, "PrimaryKey", 'Test_x', 'Test_y', "Test"]
+        # [V13.4] 'Test'는 drop_cols_prep에 포함
+        drop_cols_prep = [key_col, label_col, "PrimaryKey", "Test"]
+        # v12의 'Test_x', 'Test_y'가 존재할 경우에만 삭제 시도
+        leakage_cols = [c for c in ['Test_x', 'Test_y'] if c in df_A_full.columns]
+        drop_cols_prep.extend(leakage_cols)
+
         X_A_full = df_A_full.drop(columns=drop_cols_prep, errors="ignore")
         
         gkf_A = GroupKFold(n_splits=N_SPLITS_KFold)
@@ -662,16 +685,22 @@ def main():
         print("[A] No training data found. Skipping training.")
 
     # --- 3. B 모델 K-Fold 학습 ---
+    # [V13.4] 'Test'로 필터링 (원본 v12 방식)
+    B_train_idx = train_idx[train_idx["Test"] == "B"].copy()
     B_test_idx  = test_idx[test_idx["Test"] == "B"].copy()
     
-    # [V13.1 수정] train_feat_processed에서 직접 필터링 (Merge 불필요)
     df_B_full = train_feat_processed[train_feat_processed["Test"] == "B"].copy()
     
     if len(df_B_full) > 0:
         y_B = df_B_full[label_col].astype(int).values
         groups_B = df_B_full['PrimaryKey'].values
         
-        drop_cols_prep = [key_col, label_col, "PrimaryKey", 'Test_x', 'Test_y', "Test"]
+        # [V13.4] 'Test'는 drop_cols_prep에 포함
+        drop_cols_prep = [key_col, label_col, "PrimaryKey", "Test"]
+        # v12의 'Test_x', 'Test_y'가 존재할 경우에만 삭제 시도
+        leakage_cols = [c for c in ['Test_x', 'Test_y'] if c in df_B_full.columns]
+        drop_cols_prep.extend(leakage_cols)
+        
         X_B_full = df_B_full.drop(columns=drop_cols_prep, errors="ignore")
         
         gkf_B = GroupKFold(n_splits=N_SPLITS_KFold)
@@ -696,8 +725,8 @@ def main():
     print("-" * 50)
 
     # --- 4. 추론 ---
-    preds_A = predict_partition_kfold(test_feat_processed, A_test_idx, "A") if len(A_test_idx) else None
-    preds_B = predict_partition_kfold(test_feat_processed, B_test_idx, "B") if len(B_test_idx) else None
+    preds_A = predict_partition_kfold(test_feat_processed, A_test_idx, "A") if len(A_test_idx) > 0 else None
+    preds_B = predict_partition_kfold(test_feat_processed, B_test_idx, "B") if len(B_test_idx) > 0 else None
 
     # --- 5. 제출 파일 생성 ---
     if preds_A is not None and preds_B is not None:
@@ -707,7 +736,9 @@ def main():
     elif preds_B is not None:
         sub = preds_B.copy()
     else:
-        sub = test_idx[[key_col]].copy()
+        # [V13.4] 원본 test_idx 사용
+        test_idx_orig = pd.read_csv(os.path.join(DATA_DIR, "test.csv"))
+        sub = test_idx_orig[[key_col]].copy()
         sub["Label"] = 0.001
 
     try:
